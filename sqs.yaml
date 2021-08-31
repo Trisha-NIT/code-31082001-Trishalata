@@ -1,0 +1,139 @@
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: Topic2
+      Subscription:
+        - Endpoint:
+            Fn::GetAtt:
+              - Queue
+              - Arn
+          Protocol: sqs
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: Queue2
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+      - Ref: Queue
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - "SQS:SendMessage" 
+              - "SQS:ReceiveMessage"
+            Resource: '*'
+            Condition:
+              ArnEquals:
+                aws:SourceArn:
+                  Ref: SNSTopic          
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: 
+            - lambda.amazonaws.com
+          Action: 
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      - 'arn:aws:iam::aws:policy/AmazonSQSFullAccess'
+      - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+      - 'arn:aws:iam::aws:policy/CloudWatchFullAccess'
+      - 'arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole'
+      - 'arn:aws:iam::aws:policy/service-role/AmazonS3ObjectLambdaExecutionRolePolicy'
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: S3Bucket
+    Properties:
+      Code:
+        ZipFile: |
+          from __future__ import print_function
+          import json
+          import boto3
+          import os
+          import sys
+          import uuid
+
+          from urllib.parse import unquote_plus
+
+          s3_client = boto3.client('s3')
+          def lambda_handler(event, context):
+            for record in event['Records']:
+              filename = record["body"]
+              print(str( filename))
+              bucket_name = "trisha123"
+              file_name = "my_test_file.txt"
+              s3 = boto3.resource("s3")
+              object = s3.Object('trisha123','my_test_file.txt')
+              txt_data = filename
+              result = object.put(Body=txt_data)
+              res = result.get('ResponseMetadata')
+              return {
+              'statusCode': 200,
+              }      
+      Description:  SQStoSNS Test
+      FunctionName: SQStoSNS-Test1
+      Handler: index.lambda_handler
+      Role: 
+        Fn::GetAtt:
+          - LambdaExecutionRole
+          - Arn
+      Runtime: python3.8
+      Timeout: '7'
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: sqs.amazonaws.com
+      SourceArn: !GetAtt Queue.Arn
+  LambdaFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt Queue.Arn
+      FunctionName: !GetAtt LambdaFunction.Arn
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: trisha123
+      VersioningConfiguration:
+        Status: Enabled      
+      AccessControl: PublicRead
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Prefix: glacier
+            Status: Enabled
+            ExpirationInDays: 365
+            Transitions:
+              - TransitionInDays: 1
+                StorageClass: GLACIER
+      WebsiteConfiguration:
+        IndexDocument: my_test_file.html  
+  BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action: 's3:*'
+            Effect: Allow
+            Principal: '*'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket     
+      
